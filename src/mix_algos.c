@@ -1,5 +1,5 @@
 /*
- * mix_algos.c — 逐样本算法（四个经典 + tanh 软饱和 + 三次软削波）
+ * mix_algos.c — 逐样本算法（四个经典 + tanh 软饱和 + 三次软削波 + μ/A 律对照）
  *
  * 统一约定：输入两路 int16，输出 float（未量化），返回被钳位的样本数。
  * 之所以不直接输出 int16，是为了让四者与 float 参考链路共用同一套度量。
@@ -158,6 +158,85 @@ long mix_audio_tanh_sat(const int16_t *a, const int16_t *b,
         if (v > 1.0)       { v = 1.0;  clamped++; }   /* 理论上不可达，兜底 */
         else if (v < -1.0) { v = -1.0; clamped++; }
         out[i] = (float)v;
+    }
+    return clamped;
+}
+
+/*
+ * [8] μ 律对照（ITU-T STL-2000 手册 g711.tex 的连续压缩律公式，μ = 255）。
+ * 语义裁定见 docs/adr/0004（票 #8/#10）：放大族对照，非软削波。
+ *
+ *   F(x) = ln(1 + μ·|x|) / ln(1 + μ)，x = (a+b)/32768 ∈ [-1, 1]
+ *
+ * 性质：
+ *   - 对数域全动态压缩映射：端点 (0,0)、(1,1)，严格凹 ⇒ 除端点外全程增益 >1；
+ *     原点斜率 μ/ln(1+μ) = 255/ln 256 ≈ 46.0（+33.25 dB，票 #9 更正，旧值 48.9 为笔误）；
+ *   - 单调有界、奇对称；全表唯一破「不放大」不变量的链路，
+ *     登记价值在测量对照——检验响度对齐框架（resid_db 吸收整体增益）对放大族是否公平；
+ *   - 与 [9] A 律构成「放大强度」维度的天然 A/B（原点斜率 46.0 vs 16.0，差 9.2 dB）；
+ *   - 钳位统计语义（登记表 §2.6）：线性相加 |x|>1 时输入钳到 ±1 再过曲线；
+ *     F 有界且 F(±1)=±1，钳位后无需再截断，仅计数。
+ */
+long mix_audio_mulaw(const int16_t *a, const int16_t *b,
+                     float *out, int n, void *ctx)
+{
+    const double mu = 255.0;
+    const double denom = log(1.0 + mu);          /* ln 256 ≈ 5.545 */
+    long clamped = 0;
+    int i;
+    (void)ctx;
+
+    for (i = 0; i < n; i++) {
+        double x = ((double)a[i] + (double)b[i]) / 32768.0;
+        double ax = fabs(x);
+
+        if (ax > 1.0) {                          /* 越界输入钳位（§2.6） */
+            ax = 1.0;
+            clamped++;
+        }
+        out[i] = (float)(copysign(log(1.0 + mu * ax) / denom, x));
+    }
+    return clamped;
+}
+
+/*
+ * [9] A 律对照（ITU-T STL-2000 手册 g711.tex 的连续压缩律公式，A = 87.6；
+ *     手册正文记 87.56，该值使原点斜率恰为 16.00，引用并存时注明——ADR-0004 裁定三）。
+ *
+ *   F(x) = sign(x)·A|x| / (1 + ln A)，           |x| < 1/A（阈下线性段）
+ *   F(x) = sign(x)·(1 + ln(A|x|)) / (1 + ln A)， 1/A ≤ |x| ≤ 1
+ *
+ * 性质：
+ *   - 放大族对照第二成员：原点斜率 A/(1+ln A) ≈ 16.0（+24.1 dB），
+ *     与 μ 律（46.0）差 9.2 dB，构成放大强度维度的 A/B；
+ *   - 阈下 1/A ≈ 0.0114 以下为线性段，但斜率 16.0 仍 >1——无任何透传段，
+ *     结构上不属软削波（裁定一）；|x|=1/A 两侧斜率相同，C1 连续；
+ *   - 端点 (0,0)、(1,1)，单调有界、奇对称；钳位统计语义与 [8] 相同（§2.6）。
+ */
+long mix_audio_alaw(const int16_t *a, const int16_t *b,
+                    float *out, int n, void *ctx)
+{
+    const double aa = 87.6;
+    const double denom = 1.0 + log(aa);          /* 1 + ln 87.6 ≈ 5.474 */
+    const double linthr = 1.0 / aa;              /* 线性段阈值 1/A ≈ 0.0114 */
+    long clamped = 0;
+    int i;
+    (void)ctx;
+
+    for (i = 0; i < n; i++) {
+        double x = ((double)a[i] + (double)b[i]) / 32768.0;
+        double ax = fabs(x);
+        double v;
+
+        if (ax > 1.0) {                          /* 越界输入钳位（§2.6） */
+            ax = 1.0;
+            clamped++;
+        }
+        if (ax < linthr)
+            v = aa * ax / denom;
+        else
+            v = (1.0 + log(aa * ax)) / denom;
+        out[i] = (float)copysign(v, x);
     }
     return clamped;
 }

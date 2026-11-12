@@ -614,7 +614,7 @@ int main(int argc, char **argv)
     limiter_cfg_t lim;
     comp_soft_cfg_t comp;
     truepeak_cfg_t tplim;
-    algo_t algos[9];
+    algo_t algos[11];
 
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
@@ -756,7 +756,11 @@ int main(int argc, char **argv)
     algos[7].fn = mix_soft_knee;              algos[7].ctx = &comp;
     algos[8].name = "truepeak 前瞻限幅";      algos[8].file = "09_truepeak.wav";
     algos[8].fn = mix_truepeak_limiter;       algos[8].ctx = &tplim;
-    nalgo = 9;
+    algos[9].name = "μ 律对照 (mu=255)";      algos[9].file = "10_mulaw.wav";
+    algos[9].fn = mix_audio_mulaw;           algos[9].ctx = NULL;
+    algos[10].name = "A 律对照 (A=87.6)";     algos[10].file = "11_alaw.wav";
+    algos[10].fn = mix_audio_alaw;           algos[10].ctx = NULL;
+    nalgo = 11;
 
     /* ---- 逐条链路：处理 -> 响度对齐 -> 度量 -> 写 WAV ---- */
     for (i = 0; i < nalgo; i++) {

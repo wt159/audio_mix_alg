@@ -16,7 +16,7 @@ C99 离线音频混音算法对比/A-B 试听工具，仅依赖 libm，不是实
 
 `audio_mix.c` 按编号分节：0 工具、3 指标、4 WAV I/O、5 合成素材、6 表格输出、7 `main()`。算法语义和指标定义见 `README.md` 与入口文件头注释：
 
-- `src/mix_algos.c`：逐样本公式（线性硬饱和、平均、防削波、contra、tanh 软饱和），签名统一；
+- `src/mix_algos.c`：逐样本公式（线性硬饱和、平均、防削波、contra、tanh 软饱和、μ/A 律对照），签名统一；
 - `src/limiter.c`：前瞻限幅器状态机（`limiter_t`，不对外暴露）+ 参考链路 `mix_float_limiter`。
 
 - 算法统一签名：`long fn(const int16_t *a, const int16_t *b, float *out, int n, void *ctx)`。输入 int16，输出 float `[-1,1]`，返回钳位样本数。
