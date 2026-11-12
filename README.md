@@ -34,8 +34,12 @@ audio_mix --outdir out             指定输出目录
 ## 编译
 
 ```
-gcc -O2 -std=c99 -o audio_mix audio_mix.c -lm
+make          # release: -O2 -Wall -Wextra -pedantic
+make debug    # -O0 -g + ASan/UBSan，调试算法问题时用
+make clean
 ```
+
+或手动：`gcc -O2 -std=c99 -o audio_mix audio_mix.c -lm`
 
 ## 指标说明
 
