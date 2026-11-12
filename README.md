@@ -2,6 +2,11 @@
 
 音频混音算法对比 / A/B 试听工具（C99，无第三方依赖）。
 
+布局：`audio_mix.c` 是入口（指标、WAV I/O、合成素材、表格输出、主流程）；被测算法和参考链路在 `src/`：
+
+- `src/mix_algos.{c,h}` — 五个逐样本公式（被测对象，链路 1/2/3/4/6）；
+- `src/limiter.{c,h}` — 前瞻限幅器与 float 参考链路（链路 5）。
+
 把一个常被混淆的问题拆开：
 
 - **混音（mixing）** = 线性相加，数学上唯一正确，且可逆；
@@ -39,7 +44,7 @@ make debug    # -O0 -g + ASan/UBSan，调试算法问题时用
 make clean
 ```
 
-或手动：`gcc -O2 -std=c99 -o audio_mix audio_mix.c -lm`
+或手动：`gcc -O2 -std=c99 -o audio_mix audio_mix.c src/mix_algos.c src/limiter.c -lm`
 
 ## 指标说明
 
