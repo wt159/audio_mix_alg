@@ -16,6 +16,7 @@
  *   [5] float 域 + 前瞻限幅     —— 推荐做法：1/sqrt(N) 预增益 + lookahead limiter
  *   [6] tanh 软饱和             —— 奇对称光滑压缩：小信号线性、单调有界，永不硬削波
  *   [7] 三次软削波 x-x³/3       —— 代数多项式族：无超越函数，带宽扩展=3（JOS PASP）
+ *   [8] 软拐点压缩器 softknee    —— 标准压缩器语义：阈值/比率/拐点宽度三元组（JAES 2012）
  *
  * 每条链路都会输出一个 16-bit WAV（响度已对齐，可直接 A/B），并打印：
  *
@@ -56,6 +57,7 @@
 
 #include "src/mix_algos.h"
 #include "src/limiter.h"
+#include "src/comp_soft.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -588,14 +590,16 @@ int main(int argc, char **argv)
     const char *outdir = "audio_mix_out";
     const char *in1 = NULL, *in2 = NULL;
     int i, n, nalgo;
-    long lim_hard_prog = 0;
+    long lim_hard_prog = 0, comp_hard_prog = 0;
     double lim_avg_gain = 1.0, lim_min_gain = 1.0;
+    double comp_avg_gain = 1.0, comp_min_gain = 1.0;
     int16_t *src_a = NULL, *src_b = NULL;
     float *ref = NULL, *mixbuf = NULL;
     int16_t *pcm = NULL;
     char path[512];
     limiter_cfg_t lim;
-    algo_t algos[7];
+    comp_soft_cfg_t comp;
+    algo_t algos[8];
 
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
@@ -702,6 +706,15 @@ int main(int argc, char **argv)
     lim.pregain = 0.70710678f; /* 1/sqrt(2) */
     lim.fs      = fs;
 
+    memset(&comp, 0, sizeof(comp));
+    comp.threshold_db = -18.0f;   /* 对齐仓库响度锚点 */
+    comp.ratio        = 4.0f;
+    comp.knee_db      = 6.0f;
+    comp.atk_ms       = 10.0f;
+    comp.rel_ms       = 100.0f;
+    comp.pregain      = 1.0f;
+    comp.fs           = fs;
+
     algos[0].name = "线性相加 + 饱和";        algos[0].file = "01_sum_clip.wav";
     algos[0].fn = mix_audio_simple;          algos[0].ctx = NULL;
     algos[1].name = "平均 1/2";               algos[1].file = "02_average.wav";
@@ -716,7 +729,9 @@ int main(int argc, char **argv)
     algos[5].fn = mix_audio_cubic_soft;     algos[5].ctx = NULL;
     algos[6].name = "float + 前瞻限幅";       algos[6].file = "07_float_limiter.wav";
     algos[6].fn = mix_float_limiter;          algos[6].ctx = &lim;
-    nalgo = 7;
+    algos[7].name = "softknee 压缩器";        algos[7].file = "08_softknee.wav";
+    algos[7].fn = mix_soft_knee;              algos[7].ctx = &comp;
+    nalgo = 8;
 
     /* ---- 逐条链路：处理 -> 响度对齐 -> 度量 -> 写 WAV ---- */
     for (i = 0; i < nalgo; i++) {
@@ -741,10 +756,13 @@ int main(int argc, char **argv)
         wav_write_mono(path, pcm, n, fs);
     }
 
-    /* 保存节目素材的限幅器统计，避免被后面的双音测试覆盖 */
+    /* 保存节目素材的限幅器/压缩器统计，避免被后面的双音测试覆盖 */
     lim_hard_prog   = lim.hard_clips;
     lim_avg_gain    = lim.gain_sum;
     lim_min_gain    = lim.gain_min;
+    comp_hard_prog  = comp.hard_clips;
+    comp_avg_gain   = comp.gain_sum;
+    comp_min_gain   = comp.gain_min;
 
     /* ---- 过载双音测试：单音 0 dBFS，合成峰值 +6 dBFS ---- */
     {
@@ -799,6 +817,10 @@ int main(int argc, char **argv)
     printf("限幅器: 平均增益 %.1f dB, 最小增益 %.1f dB, 安全钳位 %ld, 前瞻 %.1f ms, 起控 %.1f ms, 释放 %.0f ms\n",
            to_db(lim_avg_gain), to_db(lim_min_gain), lim_hard_prog,
            lim.look_ms, lim.atk_ms, lim.rel_ms);
+    printf("压缩器: 平均增益 %.1f dB, 最小增益 %.1f dB（最大衰减 %.1f dB）, 安全钳位 %ld, T=%.0f dBFS, R=%.0f:1, W=%.0f dB, 起控 %.0f ms, 释放 %.0f ms\n",
+           to_db(comp_avg_gain), to_db(comp_min_gain), -to_db(comp_min_gain),
+           comp_hard_prog, comp.threshold_db, comp.ratio, comp.knee_db,
+           comp.atk_ms, comp.rel_ms);
 
     printf("\n指标说明:\n");
     printf("  匹配增益   = 为对齐响度施加的增益；0 dB 表示该算法本身已低于目标电平。\n");

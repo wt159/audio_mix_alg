@@ -1,10 +1,12 @@
+# shellcheck disable=SC2283,SC2276  # 本文件是 Makefile：变量赋值与静态模式规则含 "=" 属正常语法，
+# 上述 ShellCheck 规则在此为误报
 CFLAGS  ?= -O2 -std=c99 -Wall -Wextra -pedantic
 LDLIBS   = -lm
 
 BIN     = audio_mix
 BIN_DBG = audio_mix_debug
 
-SRCS = audio_mix.c src/mix_algos.c src/limiter.c
+SRCS = audio_mix.c src/mix_algos.c src/limiter.c src/comp_soft.c
 OBJS = $(SRCS:.c=.o)
 
 .PHONY: all debug clean
@@ -26,7 +28,7 @@ $(BIN_DBG): $(SRCS:.c=.dbg.o)
 %.dbg.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(OBJS) $(SRCS:.c=.dbg.o): src/mix_algos.h src/limiter.h
+$(OBJS) $(SRCS:.c=.dbg.o): src/mix_algos.h src/limiter.h src/comp_soft.h
 
 clean:
 	$(RM) $(BIN) $(BIN_DBG) $(OBJS) $(SRCS:.c=.dbg.o)
