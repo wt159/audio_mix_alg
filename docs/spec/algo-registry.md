@@ -31,6 +31,7 @@
 - 检测链：4× 过采样、48 阶 4 相位 FIR，系数表以 BS.1770-4 Annex 2 逐字核对。
 - ceiling = −1.0 dBTP；**门槛 = 节目输出实测 dBTP ≤ −0.7 dB**（−1.0 上限 + R128 ±0.3 dB 容差）。
 - 实现复用检测 FIR 为指标列：对全部算法输出计算 dBTP（新增指标列，见 §4）。
+- 实现状态（2025 E 首批）：`src/truepeak.{c,h}`，登记名 `truepeak 前瞻限幅`（`09_truepeak.wav`，链路 [9]），Makefile SRCS 已登记。系数表含 22 个负系数（从 ITU PDF 逐字录入，pdfminer 提取核对 + broadcast-loudness 交叉验证）；检测链 float 域省略 12.04 dB 预衰减（Annex 2 §3 明示可省）。实测（合成 1 s，`--no-match`）：节目输出 dBTP = −1.0 dB ≤ −0.7，安全钳位 1；门槛 PASS（听感条款免执行）。注：满幅正弦峰在采样点上时 dBTP ≈ 0（滤波器增益归一），方波 1 kHz 实测 +2.0 dB ≈ 4/π 重建峰（理想 sinc +2.10 dB，48 阶 FIR 限带略低）——“满幅正弦 ≈ +3.01 dB”的校验点与标准行为不符，未采用（见 ADR-0003）。
 
 ### 2.3 D 软拐点压缩器（Giannoulis/Massberg/Reiss JAES 2012）
 

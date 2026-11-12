@@ -17,12 +17,18 @@
  *   [6] tanh 软饱和             —— 奇对称光滑压缩：小信号线性、单调有界，永不硬削波
  *   [7] 三次软削波 x-x³/3       —— 代数多项式族：无超越函数，带宽扩展=3（JOS PASP）
  *   [8] 软拐点压缩器 softknee    —— 标准压缩器语义：阈值/比率/拐点宽度三元组（JAES 2012）
+ *   [9] 真峰值前瞻限幅 truepeak  —— dBTP 驱动：窗口峰值看 4× 过采样后的样本间峰（BS.1770-4）
  *
  * 每条链路都会输出一个 16-bit WAV（响度已对齐，可直接 A/B），并打印：
  *
- *   峰值 dBFS / RMS dBFS / 波峰因数 / 钳位样本数 / 匹配增益
+ *   峰值 dBFS / RMS dBFS / 波峰因数 / 钳位样本数 / 匹配增益 / dBTP
  *   波形残差  = 节目素材上、剥离 10 ms 尺度慢变增益后的残差（能量比，dB）
  *   互调残差  = 1 kHz + 1.5 kHz（单音 0 dBFS）稳态双音下的同一指标
+ *
+ * dBTP 指标列：对全部算法的节目输出（响度对齐后）用 BS.1770-4 Annex 2 的
+ * 4× FIR 检测链测量真峰值（src/truepeak.c 复用同一套系数与过采样器）。
+ * 满幅正弦波样本峰恰在采样点上时读数 ≈ 0 dBTP；样本间峰（重建峰）
+ * 高于采样峰的部分才体现为正读数。
  *
  * 残差指标说明：
  *   先求 g = argmin ||y - g*s||，再取 10*log10(||y-g*s||^2 / ||g*s||^2)，
@@ -44,7 +50,8 @@
  *
  * 编译：
  *   gcc -O2 -std=c99 -o audio_mix \
- *       audio_mix.c src/mix_algos.c src/limiter.c -lm
+ *       audio_mix.c src/mix_algos.c src/limiter.c src/comp_soft.c \
+ *       src/truepeak.c -lm
  *
  * =============================================================================
  */
@@ -58,6 +65,7 @@
 #include "src/mix_algos.h"
 #include "src/limiter.h"
 #include "src/comp_soft.h"
+#include "src/truepeak.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -146,6 +154,7 @@ typedef struct {
     double fit_gain;
     double resid_db;
     double shape_db;      /* 剥离慢变增益后的波形残差 */
+    double dbtp;          /* 真峰值（BS.1770-4 Annex 2 检测链） */
     long   clamped;
 } metrics_t;
 
@@ -590,16 +599,18 @@ int main(int argc, char **argv)
     const char *outdir = "audio_mix_out";
     const char *in1 = NULL, *in2 = NULL;
     int i, n, nalgo;
-    long lim_hard_prog = 0, comp_hard_prog = 0;
+    long lim_hard_prog = 0, comp_hard_prog = 0, tp_hard_prog = 0;
     double lim_avg_gain = 1.0, lim_min_gain = 1.0;
     double comp_avg_gain = 1.0, comp_min_gain = 1.0;
+    double tp_avg_gain = 1.0, tp_min_gain = 1.0;
     int16_t *src_a = NULL, *src_b = NULL;
     float *ref = NULL, *mixbuf = NULL;
     int16_t *pcm = NULL;
     char path[512];
     limiter_cfg_t lim;
     comp_soft_cfg_t comp;
-    algo_t algos[8];
+    truepeak_cfg_t tplim;
+    algo_t algos[9];
 
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
@@ -715,6 +726,14 @@ int main(int argc, char **argv)
     comp.pregain      = 1.0f;
     comp.fs           = fs;
 
+    memset(&tplim, 0, sizeof(tplim));
+    tplim.ceiling = 0.891251f;   /* −1 dBTP（EBU R128 §m 上限） */
+    tplim.look_ms = 5.0f;
+    tplim.atk_ms  = 1.0f;
+    tplim.rel_ms  = 80.0f;
+    tplim.pregain = 0.70710678f; /* 1/sqrt(2) */
+    tplim.fs      = fs;
+
     algos[0].name = "线性相加 + 饱和";        algos[0].file = "01_sum_clip.wav";
     algos[0].fn = mix_audio_simple;          algos[0].ctx = NULL;
     algos[1].name = "平均 1/2";               algos[1].file = "02_average.wav";
@@ -731,7 +750,9 @@ int main(int argc, char **argv)
     algos[6].fn = mix_float_limiter;          algos[6].ctx = &lim;
     algos[7].name = "softknee 压缩器";        algos[7].file = "08_softknee.wav";
     algos[7].fn = mix_soft_knee;              algos[7].ctx = &comp;
-    nalgo = 8;
+    algos[8].name = "truepeak 前瞻限幅";      algos[8].file = "09_truepeak.wav";
+    algos[8].fn = mix_truepeak_limiter;       algos[8].ctx = &tplim;
+    nalgo = 9;
 
     /* ---- 逐条链路：处理 -> 响度对齐 -> 度量 -> 写 WAV ---- */
     for (i = 0; i < nalgo; i++) {
@@ -750,6 +771,7 @@ int main(int argc, char **argv)
         measure(mixbuf, ref, n, &algos[i].prog);
         algos[i].prog.clamped  = clamped;
         algos[i].prog.shape_db = resid_shape(mixbuf, ref, n, fs / 100);
+        algos[i].prog.dbtp     = truepeak_dbtp(mixbuf, n);
 
         join_path(path, sizeof(path), outdir, algos[i].file);
         for (k = 0; k < n; k++) pcm[k] = to_pcm16(mixbuf[k]);
@@ -763,6 +785,9 @@ int main(int argc, char **argv)
     comp_hard_prog  = comp.hard_clips;
     comp_avg_gain   = comp.gain_sum;
     comp_min_gain   = comp.gain_min;
+    tp_hard_prog    = tplim.hard_clips;
+    tp_avg_gain     = tplim.gain_sum;
+    tp_min_gain     = tplim.gain_min;
 
     /* ---- 过载双音测试：单音 0 dBFS，合成峰值 +6 dBFS ---- */
     {
@@ -795,6 +820,7 @@ int main(int argc, char **argv)
     print_right("波峰因数", 9);
     print_right("钳位", 9);
     print_right("匹配增益", 9);
+    print_right("dBTP", 9);
     print_right("波形残差dB", 12);
     print_right("互调残差dB", 12);
     putchar('\n');
@@ -805,12 +831,13 @@ int main(int argc, char **argv)
         fmt_db(s2, sizeof(s2), algos[i].imd_db);
 
         print_padded(algos[i].name, 22);
-        printf("%9.1f%8.1f%9.1f%9ld%9.1f%12s%12s\n",
+        printf("%9.1f%8.1f%9.1f%9ld%9.1f%9.1f%12s%12s\n",
                to_db(algos[i].prog.peak),
                to_db(algos[i].prog.rms),
                algos[i].prog.crest,
                algos[i].prog.clamped,
                algos[i].match_db,
+               algos[i].prog.dbtp,
                s1, s2);
     }
     printf("------------------------------------------------------------------------------------------\n");
@@ -821,12 +848,19 @@ int main(int argc, char **argv)
            to_db(comp_avg_gain), to_db(comp_min_gain), -to_db(comp_min_gain),
            comp_hard_prog, comp.threshold_db, comp.ratio, comp.knee_db,
            comp.atk_ms, comp.rel_ms);
+    printf("真峰值限幅器: 平均增益 %.1f dB, 最小增益 %.1f dB, 安全钳位 %ld, 前瞻 %.1f ms, 起控 %.1f ms, 释放 %.0f ms, ceiling %.4f (%.1f dBTP)\n",
+           to_db(tp_avg_gain), to_db(tp_min_gain), tp_hard_prog,
+           tplim.look_ms, tplim.atk_ms, tplim.rel_ms, tplim.ceiling,
+           20.0 * log10((double)tplim.ceiling));
 
     printf("\n指标说明:\n");
     printf("  匹配增益   = 为对齐响度施加的增益；0 dB 表示该算法本身已低于目标电平。\n");
     printf("  波形残差   = 节目素材上、剥离 10 ms 尺度慢变增益后的残差。只反映波形形状改变，\n");
     printf("               因此限幅器与逐样本公式可以公平比较。-inf 表示完全线性。\n");
     printf("  互调残差   = 1 kHz + 1.5 kHz 各 0 dBFS（合成峰值 +6 dBFS）下的同一指标，不含增益剥离。\n");
+    printf("  dBTP       = 真峰值：BS.1770-4 Annex 2 的 4× 过采样 FIR（48 阶 4 相位）检测链测得的\n");
+    printf("               样本间峰（重建峰）。满幅正弦若峰恰在采样点上，读数 ≈ 0 dBTP；\n");
+    printf("               样本间峰高于采样峰才体现为正读数（欠读界 0.688 dB @4×）。\n");
     printf("  平均法的残差（约 -86 / -95 dB）来自整数除法向零截断，非算法缺陷；\n");
     printf("  改用 (a+b+1)>>1 可消除。\n");
     printf("  限幅器改变的是电平，不是波形：互调残差极低；削波改变的是波形，残差高且不可逆。\n");
