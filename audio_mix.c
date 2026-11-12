@@ -7,7 +7,7 @@
  *   混音（mixing）  = 线性相加，数学上唯一正确，且可逆；
  *   防削波          = 独立的动态处理（限幅器），带时间常数，不是逐样本公式。
  *
- * 文件里保留五个「逐样本公式」作为被测对象，另加一条参考链路：
+ * 文件里保留六个「逐样本公式」作为被测对象，另加一条参考链路：
  *
  *   [1] 线性相加 + 硬饱和      —— 基准，未过载时比特级无损
  *   [2] 平均 (a+b)/2           —— 完全线性，但每路固定 -6 dB
@@ -15,6 +15,7 @@
  *   [4] (a^2+b^2)/(a+b)        —— 对 b 的增量增益恒为 -1，且在 a+b=0 处发散
  *   [5] float 域 + 前瞻限幅     —— 推荐做法：1/sqrt(N) 预增益 + lookahead limiter
  *   [6] tanh 软饱和             —— 奇对称光滑压缩：小信号线性、单调有界，永不硬削波
+ *   [7] 三次软削波 x-x³/3       —— 代数多项式族：无超越函数，带宽扩展=3（JOS PASP）
  *
  * 每条链路都会输出一个 16-bit WAV（响度已对齐，可直接 A/B），并打印：
  *
@@ -594,7 +595,7 @@ int main(int argc, char **argv)
     int16_t *pcm = NULL;
     char path[512];
     limiter_cfg_t lim;
-    algo_t algos[6];
+    algo_t algos[7];
 
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
@@ -711,9 +712,11 @@ int main(int argc, char **argv)
     algos[3].fn = mix_audio_your_formula;     algos[3].ctx = NULL;
     algos[4].name = "tanh 软饱和";            algos[4].file = "05_tanh_sat.wav";
     algos[4].fn = mix_audio_tanh_sat;         algos[4].ctx = NULL;
-    algos[5].name = "float + 前瞻限幅";       algos[5].file = "06_float_limiter.wav";
-    algos[5].fn = mix_float_limiter;          algos[5].ctx = &lim;
-    nalgo = 6;
+    algos[5].name = "三次软削波 x-x^3/3";     algos[5].file = "06_cubic_soft.wav";
+    algos[5].fn = mix_audio_cubic_soft;     algos[5].ctx = NULL;
+    algos[6].name = "float + 前瞻限幅";       algos[6].file = "07_float_limiter.wav";
+    algos[6].fn = mix_float_limiter;          algos[6].ctx = &lim;
+    nalgo = 7;
 
     /* ---- 逐条链路：处理 -> 响度对齐 -> 度量 -> 写 WAV ---- */
     for (i = 0; i < nalgo; i++) {

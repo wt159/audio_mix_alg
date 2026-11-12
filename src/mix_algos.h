@@ -19,5 +19,7 @@ long mix_audio_your_formula(const int16_t *a, const int16_t *b,
                             float *out, int n, void *ctx);
 long mix_audio_tanh_sat(const int16_t *a, const int16_t *b,
                         float *out, int n, void *ctx);
+long mix_audio_cubic_soft(const int16_t *a, const int16_t *b,
+                          float *out, int n, void *ctx);
 
 #endif
