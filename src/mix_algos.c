@@ -1,5 +1,5 @@
 /*
- * mix_algos.c — 逐样本算法（四个经典 + tanh 软饱和）
+ * mix_algos.c — 逐样本算法（四个经典 + tanh 软饱和 + 三次软削波）
  *
  * 统一约定：输入两路 int16，输出 float（未量化），返回被钳位的样本数。
  * 之所以不直接输出 int16，是为了让四者与 float 参考链路共用同一套度量。
@@ -157,6 +157,49 @@ long mix_audio_tanh_sat(const int16_t *a, const int16_t *b,
 
         if (v > 1.0)       { v = 1.0;  clamped++; }   /* 理论上不可达，兜底 */
         else if (v < -1.0) { v = -1.0; clamped++; }
+        out[i] = (float)v;
+    }
+    return clamped;
+}
+
+/*
+ * [7] 三次软削波（cubic soft clipper，JOS PASP "Cubic Soft Clipper"，§9.1.6）：
+ *
+ *   y(x) = -2/3              x <  -1
+ *   y(x) = x - x^3/3        -1 <= x <= 1
+ *   y(x) = +2/3              x >  +1
+ *
+ * 性质（与 [6] tanh 构成「代数 vs 超越」的直接 A/B 对照）：
+ *   - 奇对称、严格单调（中段斜率 1-x^2 >= 0），无超越函数调用，
+ *     每样本仅 2 次乘加，是本仓库最快的软饱和；
+ *   - 曲线端点 f(±1) = ±2/3，平台段钳到端点值，±1 处值连续但斜率为 0，
+ *     仅 C0 连续（tanh 实现是 C1，接点两侧斜率连续）；
+ *   - JOS 谱页结论：带宽扩展限制为 3 倍，是奇函数非线性可得的最慢
+ *     混叠率，失真以三次谐波为主；
+ *   - 输入按线性叠加 x=(a+b)/32768 归一到 ±2（两路满量程同相叠加），
+ *     输出恒有界 |y| <= 2/3（约 -3.5 dBFS），数学上不会削波。
+ * 钳位统计语义与 [6] tanh 一致：统计 |x|>1 进入平台段的样本数。
+ */
+long mix_audio_cubic_soft(const int16_t *a, const int16_t *b,
+                          float *out, int n, void *ctx)
+{
+    long clamped = 0;
+    int i;
+    (void)ctx;
+
+    for (i = 0; i < n; i++) {
+        double x = ((double)a[i] + (double)b[i]) / 32768.0;
+        double v;
+
+        if (x > 1.0) {
+            v = 2.0 / 3.0;
+            clamped++;                  /* 进入平台段，计入钳位 */
+        } else if (x < -1.0) {
+            v = -2.0 / 3.0;
+            clamped++;
+        } else {
+            v = x - (x * x * x) / 3.0;
+        }
         out[i] = (float)v;
     }
     return clamped;
