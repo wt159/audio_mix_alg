@@ -2,3 +2,4 @@ audio_mix
 audio_mix_debug
 audio_mix_out/
 *.o
+.pi/
