@@ -1,5 +1,3 @@
-# shellcheck disable=SC2283,SC2276  # 本文件是 Makefile：变量赋值与静态模式规则含 "=" 属正常语法，
-# 上述 ShellCheck 规则在此为误报
 CFLAGS  ?= -O2 -std=c99 -Wall -Wextra -pedantic
 LDLIBS   = -lm
 
